@@ -38,3 +38,32 @@ button {
 input, textarea {
   font-family: inherit;
 }
+
+/* Consistent button styles */
+.btn-primary {
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-primary:hover {
+  background: var(--accent-hover) !important;
+}
+
+.btn-secondary {
+  transition: color 0.15s, border-color 0.15s;
+}
+.btn-secondary:hover {
+  color: var(--text-primary) !important;
+  border-color: var(--text-secondary) !important;
+}
+
+/* Vault card hover states */
+.vault-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Tag chip hover */
+.tag-chip:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
