@@ -59,9 +59,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const handler = () => onLock();
-    window.addEventListener('vault-locked', handler);
-    return () => window.removeEventListener('vault-locked', handler);
+    const unsubscribe = window.vault.onLocked(onLock);
+    return unsubscribe;
   }, [onLock]);
 
   const handleVaultDataChange = useCallback((meta: VaultMetadata) => {

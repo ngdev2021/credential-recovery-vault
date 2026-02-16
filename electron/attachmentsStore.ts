@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import { join, basename, extname } from 'path';
-import { readFile, writeFile, mkdir, unlink, readdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, unlink, readdir, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomBytes, createHash } from 'crypto';
 import { xchacha20poly1305 } from '@noble/ciphers/chacha';
@@ -123,7 +123,15 @@ export async function readAttachmentBlobRaw(attachmentId: string): Promise<Buffe
 export async function writeAttachmentBlobRaw(attachmentId: string, blob: Buffer): Promise<void> {
   const dir = getAttachmentsDir();
   if (!existsSync(dir)) await mkdir(dir, { recursive: true });
-  await writeFile(getBlobPath(attachmentId), blob);
+  const path = getBlobPath(attachmentId);
+  const tmpPath = `${path}.tmp.${Date.now()}`;
+  try {
+    await writeFile(tmpPath, blob);
+    await rename(tmpPath, path);
+  } catch (error) {
+    await unlink(tmpPath).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function deleteAllAttachmentBlobs(): Promise<void> {

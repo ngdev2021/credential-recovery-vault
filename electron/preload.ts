@@ -1,47 +1,46 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { VaultApi } from '../shared/types/preload';
 
-ipcRenderer.on('vault:locked', () => {
-  window.dispatchEvent(new Event('vault-locked'));
-});
-import type { VaultItem, EncryptedVault, VaultAttachment } from '../shared/types/vault';
-
-const vaultApi = {
+const vaultApi: VaultApi = {
   exists: () => ipcRenderer.invoke('vault:exists'),
-  create: (masterPassword: string) =>
-    ipcRenderer.invoke('vault:create', masterPassword),
+  getState: () => ipcRenderer.invoke('vault:getState'),
+  create: (masterPassword: string) => ipcRenderer.invoke('vault:create', masterPassword),
   unlock: (password: string) => ipcRenderer.invoke('vault:unlock', password),
   lock: () => ipcRenderer.invoke('vault:lock'),
-  getState: () => ipcRenderer.invoke('vault:getState'),
-  addItem: (item: Omit<VaultItem, 'id' | 'createdAt' | 'updatedAt'>) =>
-    ipcRenderer.invoke('vault:addItem', item),
-  updateItem: (id: string, updates: Partial<VaultItem>) =>
-    ipcRenderer.invoke('vault:updateItem', id, updates),
-  deleteItem: (id: string) => ipcRenderer.invoke('vault:deleteItem', id),
+  addItem: (item) => ipcRenderer.invoke('vault:addItem', item),
+  updateItem: (id, updates) => ipcRenderer.invoke('vault:updateItem', id, updates),
+  deleteItem: (id) => ipcRenderer.invoke('vault:deleteItem', id),
+  listItems: async () => {
+    const state = await ipcRenderer.invoke('vault:getState');
+    return state?.items ?? [];
+  },
   search: (query: string) => ipcRenderer.invoke('vault:search', query),
-  exportEncrypted: (password: string) =>
-    ipcRenderer.invoke('vault:exportEncrypted', password),
-  importEncrypted: (encrypted: EncryptedVault, password: string) =>
-    ipcRenderer.invoke('vault:importEncrypted', encrypted, password),
-  pickFile: (options?: { forImport?: boolean; forBundle?: boolean }) =>
-    ipcRenderer.invoke('vault:pickFile', options),
-  readAndParseRecoveryFile: (filePath: string) =>
-    ipcRenderer.invoke('vault:readAndParseRecoveryFile', filePath),
+  saveItem: async (item) => {
+    if ('id' in item && item.id) {
+      return ipcRenderer.invoke('vault:updateItem', item.id, item);
+    }
+    return ipcRenderer.invoke('vault:addItem', item);
+  },
+  exportEncrypted: (password: string) => ipcRenderer.invoke('vault:exportEncrypted', password),
+  importEncrypted: (encrypted, password: string) => ipcRenderer.invoke('vault:importEncrypted', encrypted, password),
+  pickFile: (options) => ipcRenderer.invoke('vault:pickFile', options),
+  readAndParseRecoveryFile: (filePath: string) => ipcRenderer.invoke('vault:readAndParseRecoveryFile', filePath),
   attachFile: (itemId: string) => ipcRenderer.invoke('vault:attachFile', itemId),
-  removeAttachment: (itemId: string, attachmentId: string) =>
-    ipcRenderer.invoke('vault:removeAttachment', itemId, attachmentId),
-  openAttachment: (attachmentId: string) =>
-    ipcRenderer.invoke('vault:openAttachment', attachmentId),
+  removeAttachment: (itemId: string, attachmentId: string) => ipcRenderer.invoke('vault:removeAttachment', itemId, attachmentId),
+  openAttachment: (attachmentId: string) => ipcRenderer.invoke('vault:openAttachment', attachmentId),
   exportBundle: () => ipcRenderer.invoke('vault:exportBundle'),
+  importBundleReplace: (filePath: string, password: string) => ipcRenderer.invoke('vault:importBundle', filePath, password, 'replace'),
+  importBundleMerge: (filePath: string, password: string) => ipcRenderer.invoke('vault:importBundle', filePath, password, 'merge'),
+  importBundle: (filePath: string, password: string, mode: 'replace' | 'merge') => ipcRenderer.invoke('vault:importBundle', filePath, password, mode),
   getLastBackup: () => ipcRenderer.invoke('vault:getLastBackup'),
   copyWithTimeout: (text: string) => ipcRenderer.invoke('vault:copyWithTimeout', text),
-  importBundle: (filePath: string, password: string, mode: 'replace' | 'merge') =>
-    ipcRenderer.invoke('vault:importBundle', filePath, password, mode),
+  onLocked: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('vault:locked', listener);
+    return () => {
+      ipcRenderer.removeListener('vault:locked', listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld('vault', vaultApi);
-
-declare global {
-  interface Window {
-    vault: typeof vaultApi;
-  }
-}

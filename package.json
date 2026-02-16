@@ -8,7 +8,9 @@
     "build": "tsc -p tsconfig.electron.json && vite build",
     "preview": "vite preview",
     "electron:dev": "tsc -p tsconfig.electron.json && concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "tsc -p tsconfig.electron.json && vite build && electron-builder"
+    "electron:build": "tsc -p tsconfig.electron.json && vite build && electron-builder",
+    "test:unit": "tsc -p tsconfig.electron.json && node --test tests/unit.test.mjs",
+    "test:integration": "echo \"Playwright integration tests require browser dependencies and are not configured in this environment.\" && exit 1"
   },
   "dependencies": {
     "@noble/ciphers": "^1.0.0",

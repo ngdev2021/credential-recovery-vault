@@ -22,7 +22,7 @@ import { getVaultKey } from './crypto/vaultCrypto';
 import { saveLastBackupInfo, getLastBackupInfo } from './backupStore';
 import type { VaultPayload, VaultItem, EncryptedVault, VaultAttachment, VaultExportBundle } from '../shared/types/vault';
 import { v4 as uuidv4 } from 'uuid';
-import { writeFile, readFile, mkdtemp } from 'fs/promises';
+import { writeFile, readFile, mkdtemp, rename, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 
 let mainWindow: BrowserWindow | null = null;
@@ -36,6 +36,17 @@ function clearSensitiveData(): void {
   vaultKey = null;
 }
 
+
+async function writeJsonAtomically(filePath: string, data: unknown): Promise<void> {
+  const tmpPath = `${filePath}.tmp.${Date.now()}`;
+  try {
+    await writeFile(tmpPath, JSON.stringify(data), 'utf-8');
+    await rename(tmpPath, filePath);
+  } catch (error) {
+    await unlink(tmpPath).catch(() => undefined);
+    throw error;
+  }
+}
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -218,7 +229,7 @@ ipcMain.handle('vault:exportBundle', async () => {
     filters: [{ name: 'Vault backup', extensions: ['json'] }],
   });
   if (result.canceled || !result.filePath) return null;
-  await writeFile(result.filePath, JSON.stringify(bundle), 'utf-8');
+  await writeJsonAtomically(result.filePath, bundle);
   await saveLastBackupInfo({
     path: result.filePath,
     exportedAt: new Date().toISOString(),
