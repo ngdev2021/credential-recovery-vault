@@ -70,8 +70,11 @@ function App() {
 
   if (appState === 'loading') {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
-        <span style={{ color: 'var(--text-secondary)' }}>Loading...</span>
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', gap: 16 }}>
+        <div role="status" aria-label="Loading">
+          <div style={{ width: 32, height: 32, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        </div>
+        <span style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Loading...</span>
       </div>
     );
   }

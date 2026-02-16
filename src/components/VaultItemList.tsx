@@ -1,4 +1,5 @@
 import type { VaultItem } from '../../shared/types/vault';
+import { EmptyStateIllustration } from './EmptyStateIllustration';
 
 const styles: Record<string, React.CSSProperties> = {
   section: { marginBottom: 24 },
@@ -7,10 +8,13 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 16,
+    flexWrap: 'wrap',
+    gap: 12,
   },
   sectionTitle: { fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' },
   addBtn: {
     padding: '8px 16px',
+    minHeight: 44,
     background: 'var(--accent)',
     border: 'none',
     borderRadius: 8,
@@ -18,7 +22,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     fontWeight: 600,
   },
-  addBtnHover: { background: 'var(--accent-hover)' },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
@@ -30,21 +33,22 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 10,
     padding: 16,
     cursor: 'pointer',
-    transition: 'border-color 0.15s',
+    boxShadow: 'var(--shadow-sm)',
   },
-  cardHover: { borderColor: 'var(--accent)' },
   cardTitle: { fontSize: 16, fontWeight: 600, marginBottom: 4 },
   cardDomain: { fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 },
-  cardMeta: { fontSize: 12, color: 'var(--text-secondary)' },
+  cardMeta: { fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 },
+  cardFooter: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   empty: {
     textAlign: 'center',
     padding: 48,
     color: 'var(--text-secondary)',
     border: '1px dashed var(--border)',
     borderRadius: 12,
+    background: 'var(--bg-secondary)',
   },
-  emptyTitle: { fontSize: 18, marginBottom: 8 },
-  emptyDesc: { fontSize: 14 },
+  emptyTitle: { fontSize: 18, fontWeight: 600, marginBottom: 8, color: 'var(--text-primary)' },
+  emptyDesc: { fontSize: 14, marginBottom: 16 },
 };
 
 interface VaultItemListProps {
@@ -59,10 +63,10 @@ export function VaultItemList({ items, onSelect, onAdd }: VaultItemListProps) {
       <div style={styles.sectionHeader}>
         <h2 style={styles.sectionTitle}>Your credentials</h2>
         <button
+          className="btn-primary"
           style={styles.addBtn}
-          onMouseEnter={(e) => Object.assign(e.currentTarget.style, styles.addBtnHover)}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent)'; }}
           onClick={onAdd}
+          aria-label="Add new credential"
         >
           + Add item
         </button>
@@ -70,11 +74,13 @@ export function VaultItemList({ items, onSelect, onAdd }: VaultItemListProps) {
 
       {items.length === 0 ? (
         <div style={styles.empty}>
+          <EmptyStateIllustration />
           <p style={styles.emptyTitle}>No credentials yet</p>
           <p style={styles.emptyDesc}>
             Add your first login, recovery codes, or notes. Everything is encrypted locally.
           </p>
           <button
+            className="btn-primary"
             style={{ ...styles.addBtn, marginTop: 16 }}
             onClick={onAdd}
           >
@@ -88,16 +94,31 @@ export function VaultItemList({ items, onSelect, onAdd }: VaultItemListProps) {
             return (
               <div
                 key={item.id}
+                className="vault-card card-elevated"
                 style={styles.card}
-                onMouseEnter={(e) => Object.assign(e.currentTarget.style, styles.cardHover)}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = ''; }}
                 onClick={() => onSelect(item)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => e.key === 'Enter' && onSelect(item)}
+                aria-label={`Open ${item.title}`}
               >
-                <div style={styles.cardTitle}>{item.title}</div>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={styles.cardTitle}>{item.title}</div>
+                  {item.riskLevel && (
+                    <span
+                      className={`risk-dot ${item.riskLevel}`}
+                      title={`Risk: ${item.riskLevel}`}
+                      aria-hidden
+                    />
+                  )}
+                </div>
                 <div style={styles.cardDomain}>{item.domain || '—'}</div>
                 <div style={styles.cardMeta}>
                   {item.usernames?.[0] || 'No username'} · {item.recoveryCodes?.length ?? 0} codes
                   {attachmentCount > 0 && ` · ${attachmentCount} file${attachmentCount === 1 ? '' : 's'}`}
+                </div>
+                <div style={styles.cardFooter}>
+                  <span className={`badge-category ${item.category}`}>{item.category}</span>
                 </div>
               </div>
             );

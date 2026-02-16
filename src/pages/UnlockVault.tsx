@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { VaultMetadata } from '../../shared/types/vault';
+import { useToast } from '../components/Toast';
+import { LoadingSpinner } from '../components/LoadingSpinner';
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
@@ -18,6 +20,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 40,
     maxWidth: 420,
     width: '100%',
+    boxShadow: 'var(--shadow-md)',
   },
   title: {
     fontSize: 24,
@@ -65,6 +68,7 @@ export function UnlockVault({ onUnlocked }: UnlockVaultProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const toast = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,7 +78,9 @@ export function UnlockVault({ onUnlocked }: UnlockVaultProps) {
       const { metadata } = await window.vault.unlock(password);
       onUnlocked(metadata);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid password');
+      const msg = err instanceof Error ? err.message : 'Invalid password';
+      setError(msg);
+      toast.show(msg, 'error');
     } finally {
       setLoading(false);
     }
@@ -92,14 +98,24 @@ export function UnlockVault({ onUnlocked }: UnlockVaultProps) {
             type="password"
             placeholder="Master password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => { setPassword(e.target.value); setError(''); }}
             style={styles.input}
+            className={error ? 'input-error' : ''}
             autoFocus
             disabled={loading}
+            aria-invalid={!!error}
+            aria-describedby={error ? 'unlock-error' : undefined}
           />
-          {error && <p style={styles.error}>{error}</p>}
-          <button type="submit" style={styles.button} disabled={loading}>
-            {loading ? 'Unlocking...' : 'Unlock vault'}
+          {error && <p id="unlock-error" style={styles.error} role="alert">{error}</p>}
+          <button type="submit" className="btn-primary" style={styles.button} disabled={loading} aria-busy={loading}>
+            {loading ? (
+              <>
+                <LoadingSpinner size={20} style={{ marginRight: 8, verticalAlign: 'middle' }} />
+                Unlocking...
+              </>
+            ) : (
+              'Unlock vault'
+            )}
           </button>
         </form>
       </div>

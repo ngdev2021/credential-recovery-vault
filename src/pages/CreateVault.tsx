@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { VaultMetadata } from '../../shared/types/vault';
+import { useToast } from '../components/Toast';
+import { LoadingSpinner } from '../components/LoadingSpinner';
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
@@ -18,6 +20,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 40,
     maxWidth: 420,
     width: '100%',
+    boxShadow: 'var(--shadow-md)',
   },
   title: {
     fontSize: 24,
@@ -66,6 +69,7 @@ export function CreateVault({ onCreated }: CreateVaultProps) {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const toast = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,7 +87,9 @@ export function CreateVault({ onCreated }: CreateVaultProps) {
       const { metadata } = await window.vault.create(password);
       onCreated(metadata);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create vault');
+      const msg = err instanceof Error ? err.message : 'Failed to create vault';
+      setError(msg);
+      toast.show(msg, 'error');
     } finally {
       setLoading(false);
     }
@@ -101,22 +107,34 @@ export function CreateVault({ onCreated }: CreateVaultProps) {
             type="password"
             placeholder="Master password (min 12 chars)"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => { setPassword(e.target.value); setError(''); }}
             style={styles.input}
+            className={error ? 'input-error' : ''}
             autoFocus
             disabled={loading}
+            aria-invalid={!!error}
+            aria-describedby={error ? 'create-error' : undefined}
           />
           <input
             type="password"
             placeholder="Confirm master password"
             value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
+            onChange={(e) => { setConfirm(e.target.value); setError(''); }}
             style={styles.input}
+            className={error ? 'input-error' : ''}
             disabled={loading}
+            aria-invalid={!!error}
           />
-          {error && <p style={styles.error}>{error}</p>}
-          <button type="submit" style={styles.button} disabled={loading}>
-            {loading ? 'Creating...' : 'Create vault'}
+          {error && <p id="create-error" style={styles.error} role="alert">{error}</p>}
+          <button type="submit" className="btn-primary" style={styles.button} disabled={loading} aria-busy={loading}>
+            {loading ? (
+              <>
+                <LoadingSpinner size={20} style={{ marginRight: 8, verticalAlign: 'middle' }} />
+                Creating...
+              </>
+            ) : (
+              'Create vault'
+            )}
           </button>
         </form>
       </div>

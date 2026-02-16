@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { VaultMetadata, VaultItem } from '../../shared/types/vault';
 import { VaultItemList } from '../components/VaultItemList';
 import { VaultItemForm } from '../components/VaultItemForm';
+import { useToast } from '../components/Toast';
 
 const AUTO_LOCK_MS = 5 * 60 * 1000; // 5 minutes (config later)
 
@@ -45,6 +46,9 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     padding: 24,
     overflow: 'auto',
+    maxWidth: 1200,
+    margin: '0 auto',
+    width: '100%',
   },
 };
 
@@ -57,6 +61,7 @@ interface VaultDashboardProps {
 export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDashboardProps) {
   const [items, setItems] = useState<VaultItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const toast = useToast();
   const [filteredItems, setFilteredItems] = useState<VaultItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<VaultItem | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -117,7 +122,7 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
 
   const handleLockedError = (err: unknown) => {
     if (err instanceof Error && err.message.includes('locked')) onLock();
-    else alert(err instanceof Error ? err.message : 'Operation failed');
+    else toast.show(err instanceof Error ? err.message : 'Operation failed', 'error');
   };
 
   const handleAddItem = (item: Omit<VaultItem, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -149,11 +154,11 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
       if (result) {
         const info = await window.vault.getLastBackup();
         if (info) setLastBackup(info);
-        alert(`Exported to ${result.path}`);
+        toast.show(`Exported to ${result.path}`);
       }
     } catch (err) {
       if (err instanceof Error && err.message.includes('locked')) onLock();
-      else alert(err instanceof Error ? err.message : 'Export failed');
+      else toast.show(err instanceof Error ? err.message : 'Export failed', 'error');
     }
   };
 
@@ -177,7 +182,7 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
       setImportPassword('');
     } catch (err) {
       if (err instanceof Error && err.message.includes('locked')) onLock();
-      else alert(err instanceof Error ? err.message : 'Import failed');
+      else toast.show(err instanceof Error ? err.message : 'Import failed', 'error');
     }
   };
 
@@ -218,20 +223,20 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
           />
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button style={styles.lockBtn} onClick={() => setShowEmergencyKit(true)} title="Generate printable emergency kit">
+          <button className="btn-secondary" style={styles.lockBtn} onClick={() => setShowEmergencyKit(true)} aria-label="Open emergency kit">
             Emergency kit
           </button>
-          <button style={styles.lockBtn} onClick={handleExport} title="Export vault + attachments">
+          <button className="btn-secondary" style={styles.lockBtn} onClick={handleExport} aria-label="Export vault">
             Export
           </button>
-          <button style={styles.lockBtn} onClick={handleImportClick} title="Import vault backup">
+          <button className="btn-secondary" style={styles.lockBtn} onClick={handleImportClick} aria-label="Import vault backup">
             Import
           </button>
           <button
+            className="btn-secondary btn-lock"
             style={styles.lockBtn}
             onClick={handleLock}
-            onMouseEnter={(e) => Object.assign(e.currentTarget.style, styles.lockBtnHover)}
-            onMouseLeave={(e) => { e.currentTarget.style.color = ''; e.currentTarget.style.borderColor = ''; }}
+            aria-label="Lock vault now"
           >
             Lock now
           </button>
@@ -239,7 +244,7 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
       </header>
 
       {showEmergencyKit && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div style={{ background: 'white', color: '#333', padding: 32, maxWidth: 480, width: '90%', borderRadius: 12 }}>
             <h2 style={{ marginBottom: 16 }}>Emergency Recovery Kit</h2>
             <p style={{ fontSize: 14, marginBottom: 12 }}>Print this page and store it securely.</p>
@@ -260,7 +265,7 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
       )}
 
       {showImportModal && importFilePath && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 12, padding: 24, maxWidth: 400, width: '90%' }}>
             <h3 style={{ marginBottom: 16 }}>Import vault backup</h3>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>{importFilePath.split('/').pop()}</p>
@@ -281,17 +286,20 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
       )}
 
       {backupStatus === 'none' && (
-        <div style={{ padding: '8px 24px', background: 'rgba(210, 153, 34, 0.2)', color: 'var(--warning)', fontSize: 13 }}>
+        <div role="alert" style={{ padding: '12px 24px', background: 'rgba(210, 153, 34, 0.15)', borderBottom: '1px solid var(--border)', color: 'var(--warning)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span aria-hidden style={{ fontSize: 18 }}>⚠️</span>
           No backup yet. Export your vault to a file for safekeeping.
         </div>
       )}
       {backupStatus === 'warn' && (
-        <div style={{ padding: '8px 24px', background: 'rgba(210, 153, 34, 0.2)', color: 'var(--warning)', fontSize: 13 }}>
+        <div role="alert" style={{ padding: '12px 24px', background: 'rgba(210, 153, 34, 0.15)', borderBottom: '1px solid var(--border)', color: 'var(--warning)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span aria-hidden style={{ fontSize: 18 }}>⚠️</span>
           Backup is {backupDaysAgo} days old. Export your vault to stay safe.
         </div>
       )}
       {backupStatus === 'critical' && (
-        <div style={{ padding: '8px 24px', background: 'rgba(248, 81, 73, 0.2)', color: 'var(--danger)', fontSize: 13 }}>
+        <div role="alert" style={{ padding: '12px 24px', background: 'rgba(248, 81, 73, 0.15)', borderBottom: '1px solid var(--border)', color: 'var(--danger)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span aria-hidden style={{ fontSize: 18 }}>🚨</span>
           No recent backup ({backupDaysAgo} days). Export now to avoid losing access.
         </div>
       )}

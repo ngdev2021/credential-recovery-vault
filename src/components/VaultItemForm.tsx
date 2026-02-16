@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { VaultItem, RecoveryCode, VaultItemCategory, VaultAttachment } from '../../shared/types/vault';
 import { parseRecoveryCodesFromFile } from '../utils/recoveryCodes';
 import { applyRotateToRecoveryCodes } from '../../shared/utils/vaultMerge';
+import { useToast } from './Toast';
 
 const CATEGORIES: VaultItemCategory[] = ['social', 'banking', 'work', 'dev', 'email', 'other'];
 
@@ -16,6 +17,7 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 100,
   },
   modal: {
+    boxShadow: 'var(--shadow-lg)',
     background: 'var(--bg-secondary)',
     border: '1px solid var(--border)',
     borderRadius: 12,
@@ -38,6 +40,9 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--text-secondary)',
     fontSize: 24,
     cursor: 'pointer',
+    padding: 10,
+    minWidth: 44,
+    minHeight: 44,
   },
   row: { marginBottom: 16 },
   label: { display: 'block', fontSize: 13, color: 'var(--text-secondary)', marginBottom: 6 },
@@ -180,13 +185,12 @@ export function VaultItemForm({
   const [tagsStr, setTagsStr] = useState('');
   const [importPreview, setImportPreview] = useState<{ filename: string; count: number; duplicates: number } | null>(null);
   const [showUnusedOnly, setShowUnusedOnly] = useState(false);
-  const [copyToast, setCopyToast] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
 
   const handleCopy = (text: string) => {
     window.vault.copyWithTimeout(text);
-    setCopyToast(true);
-    setTimeout(() => setCopyToast(false), 2000);
+    toast.show('Copied!');
   };
 
   useEffect(() => {
@@ -299,7 +303,7 @@ export function VaultItemForm({
           setTimeout(() => setImportPreview(null), 5000);
         } catch (err) {
           console.error('Import failed:', err);
-          alert(err instanceof Error ? err.message : 'Failed to import');
+          toast.show(err instanceof Error ? err.message : 'Failed to import', 'error');
         }
       }
     }
@@ -341,7 +345,7 @@ export function VaultItemForm({
       setTimeout(() => setImportPreview(null), 5000);
     } catch (err) {
       console.error('Import failed:', err);
-      alert(err instanceof Error ? err.message : 'Failed to import');
+      toast.show(err instanceof Error ? err.message : 'Failed to import', 'error');
     }
   };
 
@@ -360,7 +364,7 @@ export function VaultItemForm({
 
   const handleVaultError = (err: unknown) => {
     if (err instanceof Error && err.message.includes('locked')) onLocked?.();
-    else alert(err instanceof Error ? err.message : 'Operation failed');
+    else toast.show(err instanceof Error ? err.message : 'Operation failed', 'error');
   };
 
   const handleAttachFile = async () => {
@@ -402,31 +406,20 @@ export function VaultItemForm({
 
 
   return (
-    <div style={styles.overlay} onClick={(e) => e.target === e.currentTarget && onCancel()}>
-      {copyToast && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: 24,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            padding: '8px 16px',
-            background: 'var(--success)',
-            color: '#fff',
-            borderRadius: 8,
-            fontSize: 14,
-            fontWeight: 600,
-            zIndex: 101,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-          }}
-        >
-          Copied!
-        </div>
-      )}
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+    <div
+      className="modal-overlay"
+      style={styles.overlay}
+      onClick={(e) => e.target === e.currentTarget && onCancel()}
+    >
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()} className="card-elevated">
         <div style={styles.modalHeader}>
           <h2 style={styles.modalTitle}>{mode === 'add' ? 'Add credential' : 'Edit credential'}</h2>
-          <button style={styles.closeBtn} onClick={onCancel} type="button">
+          <button
+            style={styles.closeBtn}
+            onClick={onCancel}
+            type="button"
+            aria-label="Close"
+          >
             ×
           </button>
         </div>
