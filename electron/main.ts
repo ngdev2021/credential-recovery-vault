@@ -1,0 +1,300 @@
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { join } from 'path';
+import { readEncryptedVault } from './vaultStore';
+import {
+  vaultExists,
+  createVault,
+  unlockVault,
+  saveVault,
+  exportVaultEncrypted,
+  importVaultEncrypted,
+} from './vaultStore';
+import {
+  saveEncryptedAttachment,
+  decryptAttachment,
+  deleteAttachmentBlob,
+  computeFileSha256,
+} from './attachmentsStore';
+import { getVaultKey } from './crypto/vaultCrypto';
+import type { VaultPayload, VaultItem, EncryptedVault, VaultAttachment } from '../shared/types/vault';
+import { v4 as uuidv4 } from 'uuid';
+import { writeFile, mkdtemp } from 'fs/promises';
+import { tmpdir } from 'os';
+
+let mainWindow: BrowserWindow | null = null;
+let decryptedPayload: VaultPayload | null = null;
+let masterPassword: string | null = null;
+let vaultKey: Buffer | null = null;
+
+function clearSensitiveData(): void {
+  decryptedPayload = null;
+  masterPassword = null;
+  vaultKey = null;
+}
+
+function createWindow(): void {
+  mainWindow = new BrowserWindow({
+    width: 1100,
+    height: 750,
+    minWidth: 800,
+    minHeight: 600,
+    webPreferences: {
+      preload: join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+    show: false,
+  });
+
+  const isDev = process.env.NODE_ENV !== 'production';
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.webContents.openDevTools();
+  } else {
+    mainWindow.loadFile(join(__dirname, '../../dist/index.html'));
+  }
+
+  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    clearSensitiveData();
+  });
+}
+
+app.whenReady().then(createWindow);
+app.on('window-all-closed', () => app.quit());
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+ipcMain.handle('vault:exists', async () => vaultExists());
+
+ipcMain.handle('vault:create', async (_, masterPasswordArg: string) => {
+  await createVault(masterPasswordArg);
+  const encrypted = await readEncryptedVault();
+  if (encrypted) vaultKey = await getVaultKey(masterPasswordArg, encrypted.salt);
+  const payload = await unlockVault(masterPasswordArg);
+  decryptedPayload = payload;
+  masterPassword = masterPasswordArg;
+  return { success: true, metadata: payload.metadata };
+});
+
+ipcMain.handle('vault:unlock', async (_, password: string) => {
+  const encrypted = await readEncryptedVault();
+  if (!encrypted) throw new Error('No vault found.');
+  vaultKey = await getVaultKey(password, encrypted.salt);
+  const payload = await unlockVault(password);
+  decryptedPayload = payload;
+  masterPassword = password;
+  return { success: true, metadata: payload.metadata, items: payload.items };
+});
+
+ipcMain.handle('vault:lock', async () => {
+  clearSensitiveData();
+  return { success: true };
+});
+
+ipcMain.handle('vault:getState', async () => {
+  if (!decryptedPayload) return null;
+  return {
+    metadata: decryptedPayload.metadata,
+    items: decryptedPayload.items,
+  };
+});
+
+ipcMain.handle('vault:addItem', async (_, item: Omit<VaultItem, 'id' | 'createdAt' | 'updatedAt'>) => {
+  if (!decryptedPayload || !masterPassword) {
+    throw new Error('Vault is locked');
+  }
+  const now = new Date().toISOString();
+  const newItem: VaultItem = {
+    ...item,
+    id: uuidv4(),
+    createdAt: now,
+    updatedAt: now,
+  };
+  decryptedPayload.items.push(newItem);
+  decryptedPayload.metadata.itemCount = decryptedPayload.items.length;
+  decryptedPayload.metadata.updatedAt = now;
+
+  const allTags = new Set(decryptedPayload.metadata.tags);
+  item.tags.forEach((t) => allTags.add(t));
+  decryptedPayload.metadata.tags = Array.from(allTags);
+
+  await saveVault(masterPassword, decryptedPayload);
+  return newItem;
+});
+
+ipcMain.handle('vault:updateItem', async (_, id: string, updates: Partial<VaultItem>) => {
+  if (!decryptedPayload || !masterPassword) {
+    throw new Error('Vault is locked');
+  }
+  const index = decryptedPayload.items.findIndex((i) => i.id === id);
+  if (index === -1) throw new Error('Item not found');
+
+  const { id: _id, createdAt, ...allowable } = updates;
+  decryptedPayload.items[index] = {
+    ...decryptedPayload.items[index],
+    ...allowable,
+    updatedAt: new Date().toISOString(),
+  };
+
+  decryptedPayload.metadata.updatedAt = decryptedPayload.items[index].updatedAt;
+  const allTags = new Set<string>();
+  decryptedPayload.items.forEach((i) => i.tags.forEach((t) => allTags.add(t)));
+  decryptedPayload.metadata.tags = Array.from(allTags);
+
+  await saveVault(masterPassword, decryptedPayload);
+  return decryptedPayload.items[index];
+});
+
+ipcMain.handle('vault:deleteItem', async (_, id: string) => {
+  if (!decryptedPayload || !masterPassword) {
+    throw new Error('Vault is locked');
+  }
+  const item = decryptedPayload.items.find((i) => i.id === id);
+  if (item?.attachments) {
+    for (const a of item.attachments) {
+      await deleteAttachmentBlob(a.id);
+    }
+  }
+  decryptedPayload.items = decryptedPayload.items.filter((i) => i.id !== id);
+  decryptedPayload.metadata.itemCount = decryptedPayload.items.length;
+  decryptedPayload.metadata.updatedAt = new Date().toISOString();
+  const allTags = new Set<string>();
+  decryptedPayload.items.forEach((i) => i.tags.forEach((t) => allTags.add(t)));
+  decryptedPayload.metadata.tags = Array.from(allTags);
+  await saveVault(masterPassword, decryptedPayload);
+  return { success: true };
+});
+
+ipcMain.handle('vault:search', async (_, query: string) => {
+  if (!decryptedPayload) return [];
+  const q = query.toLowerCase().trim();
+  if (!q) return decryptedPayload.items;
+  return decryptedPayload.items.filter(
+    (i) =>
+      i.title.toLowerCase().includes(q) ||
+      i.domain.toLowerCase().includes(q) ||
+      i.tags.some((t) => t.toLowerCase().includes(q)) ||
+      i.usernames.some((u) => u.toLowerCase().includes(q))
+  );
+});
+
+ipcMain.handle('vault:exportEncrypted', async (_, password: string) => {
+  const encrypted = await exportVaultEncrypted(password);
+  return encrypted;
+});
+
+ipcMain.handle('vault:importEncrypted', async (_, encrypted: EncryptedVault, password: string) => {
+  await importVaultEncrypted(encrypted, password);
+  vaultKey = await getVaultKey(password, encrypted.salt);
+  decryptedPayload = await unlockVault(password);
+  masterPassword = password;
+  return {
+    success: true,
+    metadata: decryptedPayload!.metadata,
+    items: decryptedPayload!.items,
+  };
+});
+
+ipcMain.handle('vault:pickFile', async (_, options?: { forImport?: boolean }) => {
+  const result = await dialog.showOpenDialog(mainWindow!, {
+    properties: ['openFile'],
+    filters: options?.forImport
+      ? [
+          { name: 'Text files', extensions: ['txt', 'csv'] },
+          { name: 'All files', extensions: ['*'] },
+        ]
+      : [
+          { name: 'Documents', extensions: ['txt', 'csv', 'pdf', 'png', 'jpg', 'jpeg'] },
+          { name: 'All files', extensions: ['*'] },
+        ],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle('vault:readAndParseRecoveryFile', async (_, filePath: string) => {
+  const fs = await import('fs/promises');
+  const text = await fs.readFile(filePath, 'utf-8');
+  const path = await import('path');
+  const filename = path.basename(filePath);
+  return { text, filename };
+});
+
+ipcMain.handle('vault:attachFile', async (_, itemId: string) => {
+  if (!decryptedPayload || !masterPassword || !vaultKey) {
+    throw new Error('Vault is locked');
+  }
+  const result = await dialog.showOpenDialog(mainWindow!, {
+    properties: ['openFile'],
+    filters: [
+      { name: 'Documents', extensions: ['txt', 'csv', 'pdf', 'png', 'jpg', 'jpeg'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const index = decryptedPayload.items.findIndex((i) => i.id === itemId);
+  if (index === -1) throw new Error('Item not found');
+
+  const item = decryptedPayload.items[index];
+  const newSha256 = await computeFileSha256(result.filePaths[0]);
+  const exists = (item.attachments ?? []).some((a) => a.sha256 === newSha256);
+  if (exists) return null;
+
+  const { attachment } = await saveEncryptedAttachment(result.filePaths[0], vaultKey);
+  const attachments = [...(item.attachments ?? []), attachment];
+  decryptedPayload.items[index] = {
+    ...item,
+    attachments,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await saveVault(masterPassword, decryptedPayload);
+  return attachment;
+});
+
+ipcMain.handle('vault:removeAttachment', async (_, itemId: string, attachmentId: string) => {
+  if (!decryptedPayload || !masterPassword) {
+    throw new Error('Vault is locked');
+  }
+  const index = decryptedPayload.items.findIndex((i) => i.id === itemId);
+  if (index === -1) throw new Error('Item not found');
+
+  const item = decryptedPayload.items[index];
+  const attachments = (item.attachments ?? []).filter((a) => a.id !== attachmentId);
+  decryptedPayload.items[index] = {
+    ...item,
+    attachments,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await deleteAttachmentBlob(attachmentId);
+  await saveVault(masterPassword, decryptedPayload);
+  return { success: true };
+});
+
+ipcMain.handle('vault:openAttachment', async (_, attachmentId: string) => {
+  if (!decryptedPayload || !vaultKey) {
+    throw new Error('Vault is locked');
+  }
+  let attachment: VaultAttachment | null = null;
+  for (const item of decryptedPayload.items) {
+    const found = (item.attachments ?? []).find((a) => a.id === attachmentId);
+    if (found) {
+      attachment = found;
+      break;
+    }
+  }
+  if (!attachment) throw new Error('Attachment not found');
+
+  const decrypted = await decryptAttachment(attachment, vaultKey);
+  const tmpDir = await mkdtemp(join(tmpdir(), 'vault-attach-'));
+  const tmpPath = join(tmpDir, attachment.filename);
+  await writeFile(tmpPath, decrypted);
+  await shell.openPath(tmpPath);
+  return { success: true };
+});
