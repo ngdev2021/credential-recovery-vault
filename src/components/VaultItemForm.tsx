@@ -1,33 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import type { VaultItem, RecoveryCode, VaultItemCategory, VaultAttachment } from '../../shared/types/vault';
-
-const HEADER_PATTERNS = /^(backup codes?|recovery codes?|save these codes?|emergency codes?):?\s*$/i;
-
-/** Parse recovery codes from file text. Handles: one per line, "1. code", "1) code", comma-separated, trims boilerplate. */
-function parseRecoveryCodesFromFile(text: string): { codes: string[]; rawCount: number; duplicateCount: number } {
-  const seen = new Set<string>();
-  const codes: string[] = [];
-  const lines = text.split(/[\r\n]+/);
-  let rawCount = 0;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    if (HEADER_PATTERNS.test(trimmed)) continue;
-    const withoutNumber = trimmed.replace(/^\d+[.\)]\s*/, '');
-    const parts = withoutNumber.split(/[,\t]+/).map((s) => s.trim());
-    for (const part of parts) {
-      const code = part.replace(/\s+/g, '');
-      if (code.length >= 4 && /^[A-Za-z0-9\-]+$/.test(code)) {
-        rawCount++;
-        if (!seen.has(code)) {
-          seen.add(code);
-          codes.push(code);
-        }
-      }
-    }
-  }
-  return { codes, rawCount, duplicateCount: rawCount - codes.length };
-}
+import { parseRecoveryCodesFromFile } from '../utils/recoveryCodes';
+import { applyRotateToRecoveryCodes } from '../../shared/utils/vaultMerge';
 
 const CATEGORIES: VaultItemCategory[] = ['social', 'banking', 'work', 'dev', 'email', 'other'];
 
@@ -189,6 +163,7 @@ interface VaultItemFormProps {
   onCancel: () => void;
   onDelete?: () => void;
   onAttachmentsChange?: () => void;
+  onLocked?: () => void;
 }
 
 export function VaultItemForm({
@@ -198,13 +173,21 @@ export function VaultItemForm({
   onCancel,
   onDelete,
   onAttachmentsChange,
+  onLocked,
 }: VaultItemFormProps) {
   const [form, setForm] = useState<Omit<VaultItem, 'id' | 'createdAt' | 'updatedAt'> & { attachments?: VaultAttachment[] }>(defaultItem);
   const [usernamesStr, setUsernamesStr] = useState('');
   const [tagsStr, setTagsStr] = useState('');
   const [importPreview, setImportPreview] = useState<{ filename: string; count: number; duplicates: number } | null>(null);
   const [showUnusedOnly, setShowUnusedOnly] = useState(false);
+  const [copyToast, setCopyToast] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCopy = (text: string) => {
+    window.vault.copyWithTimeout(text);
+    setCopyToast(true);
+    setTimeout(() => setCopyToast(false), 2000);
+  };
 
   useEffect(() => {
     if (item) {
@@ -277,16 +260,49 @@ export function VaultItemForm({
     }));
   };
 
-  const rotateRecoveryCodes = () => {
-    const now = new Date().toISOString();
+  const markAllRecoveryCodesUsed = () => {
     setForm((f) => ({
       ...f,
       recoveryCodes: (f.recoveryCodes ?? []).map((c) =>
-        c.status === 'unused' || c.status === 'used'
-          ? { ...c, status: 'replaced' as const, rotatedAt: now }
-          : c
+        c.status === 'unused' ? { ...c, status: 'used' as const } : c
       ),
     }));
+  };
+
+  const copyAllUnusedRecoveryCodes = () => {
+    const unused = (form.recoveryCodes ?? []).filter((c) => c.status === 'unused' && c.code).map((c) => c.code);
+    if (unused.length === 0) return;
+    handleCopy(unused.join('\n'));
+  };
+
+  const rotateRecoveryCodes = async () => {
+    const doRotate = () => {
+      const now = new Date().toISOString();
+      setForm((f) => ({
+        ...f,
+        recoveryCodes: applyRotateToRecoveryCodes(f.recoveryCodes ?? [], now),
+      }));
+    };
+
+    const importNow = window.confirm(
+      'Archive current codes as replaced. Do you want to import a new set now?'
+    );
+    doRotate();
+    if (importNow) {
+      const filePath = await window.vault.pickFile({ forImport: true });
+      if (filePath) {
+        try {
+          const { text, filename } = await window.vault.readAndParseRecoveryFile(filePath);
+          const { codes, duplicateCount } = parseRecoveryCodesFromFile(text);
+          addCodesToForm(codes);
+          setImportPreview({ filename, count: codes.length, duplicates: duplicateCount });
+          setTimeout(() => setImportPreview(null), 5000);
+        } catch (err) {
+          console.error('Import failed:', err);
+          alert(err instanceof Error ? err.message : 'Failed to import');
+        }
+      }
+    }
   };
 
   const addCodesToForm = (codes: string[]) => {
@@ -342,6 +358,11 @@ export function VaultItemForm({
     e.target.value = '';
   };
 
+  const handleVaultError = (err: unknown) => {
+    if (err instanceof Error && err.message.includes('locked')) onLocked?.();
+    else alert(err instanceof Error ? err.message : 'Operation failed');
+  };
+
   const handleAttachFile = async () => {
     if (!item?.id) return;
     try {
@@ -355,7 +376,7 @@ export function VaultItemForm({
         onAttachmentsChange?.();
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to attach file');
+      handleVaultError(err);
     }
   };
 
@@ -367,7 +388,7 @@ export function VaultItemForm({
       setForm((f) => ({ ...f, attachments: (f.attachments ?? []).filter((a) => a.id !== attachmentId) }));
       onAttachmentsChange?.();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to remove');
+      handleVaultError(err);
     }
   };
 
@@ -375,13 +396,33 @@ export function VaultItemForm({
     try {
       await window.vault.openAttachment(attachmentId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to open');
+      handleVaultError(err);
     }
   };
 
 
   return (
     <div style={styles.overlay} onClick={(e) => e.target === e.currentTarget && onCancel()}>
+      {copyToast && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 24,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '8px 16px',
+            background: 'var(--success)',
+            color: '#fff',
+            borderRadius: 8,
+            fontSize: 14,
+            fontWeight: 600,
+            zIndex: 101,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          }}
+        >
+          Copied!
+        </div>
+      )}
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <h2 style={styles.modalTitle}>{mode === 'add' ? 'Add credential' : 'Edit credential'}</h2>
@@ -449,7 +490,7 @@ export function VaultItemForm({
                 <button
                   type="button"
                   style={styles.addCodeBtn}
-                  onClick={() => window.vault.copyWithTimeout(form.password)}
+                  onClick={() => handleCopy(form.password)}
                   title="Copy (clears in 30s)"
                 >
                   Copy
@@ -459,7 +500,14 @@ export function VaultItemForm({
           </div>
 
           <div style={styles.codesSection}>
-            <label style={styles.label}>Recovery codes</label>
+            <label style={styles.label}>
+              Recovery codes
+              {(form.recoveryCodes ?? []).length > 0 && (
+                <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 400, color: 'var(--text-secondary)' }}>
+                  Unused: {(form.recoveryCodes ?? []).filter((c) => c.status === 'unused').length} / Total: {(form.recoveryCodes ?? []).length}
+                </span>
+              )}
+            </label>
             <input
               ref={fileInputRef}
               type="file"
@@ -495,8 +543,23 @@ export function VaultItemForm({
                 />
                 Show unused only
               </label>
+              {(form.recoveryCodes ?? []).some((c) => c.status === 'unused') && (
+                <>
+                  <button type="button" style={styles.addCodeBtn} onClick={markAllRecoveryCodesUsed} title="Mark all codes as used">
+                    Mark all used
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.addCodeBtn}
+                    onClick={copyAllUnusedRecoveryCodes}
+                    title="Copy all unused codes to clipboard (one per line)"
+                  >
+                    Copy all unused
+                  </button>
+                </>
+              )}
               {(form.recoveryCodes ?? []).some((c) => c.status === 'unused' || c.status === 'used') && (
-                <button type="button" style={styles.addCodeBtn} onClick={rotateRecoveryCodes} title="Archive current set and add new codes">
+                <button type="button" style={styles.addCodeBtn} onClick={() => rotateRecoveryCodes()} title="Archive current set and add new codes">
                   Rotate set
                 </button>
               )}
@@ -537,7 +600,7 @@ export function VaultItemForm({
                     <button
                       type="button"
                       style={styles.addCodeBtn}
-                      onClick={() => window.vault.copyWithTimeout(c.code)}
+                      onClick={() => handleCopy(c.code)}
                       title="Copy (clears in 30s)"
                     >
                       Copy

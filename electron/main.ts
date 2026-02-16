@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, clipboard } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, powerMonitor } from 'electron';
 import { join } from 'path';
 import { readEncryptedVault } from './vaultStore';
 import {
@@ -73,7 +73,17 @@ function createWindow(): void {
   });
 }
 
-app.whenReady().then(createWindow);
+function lockOnSuspendOrScreenLock(): void {
+  if (!decryptedPayload && !masterPassword) return;
+  clearSensitiveData();
+  mainWindow?.webContents.send('vault:locked');
+}
+
+app.whenReady().then(() => {
+  createWindow();
+  powerMonitor.on('lock-screen', lockOnSuspendOrScreenLock);
+  powerMonitor.on('suspend', lockOnSuspendOrScreenLock);
+});
 app.on('window-all-closed', () => app.quit());
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -226,10 +236,30 @@ ipcMain.handle('vault:exportBundle', async () => {
   return { path: result.filePath };
 });
 
+function validateBundleStructure(bundle: unknown): bundle is VaultExportBundle {
+  if (!bundle || typeof bundle !== 'object') return false;
+  const b = bundle as Record<string, unknown>;
+  if (!b.vault || typeof b.vault !== 'object') return false;
+  if (!b.attachments || typeof b.attachments !== 'object') return false;
+  return true;
+}
+
 ipcMain.handle('vault:importBundle', async (_, filePath: string, password: string, mode: 'replace' | 'merge') => {
-  const raw = await readFile(filePath, 'utf-8');
-  const bundle = JSON.parse(raw) as VaultExportBundle;
-  if (!bundle.vault || !bundle.attachments) throw new Error('Invalid vault backup file');
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf-8');
+  } catch (e) {
+    throw new Error('Could not read backup file');
+  }
+  let bundle: VaultExportBundle;
+  try {
+    bundle = JSON.parse(raw) as VaultExportBundle;
+  } catch {
+    throw new Error('Invalid vault backup: malformed JSON');
+  }
+  if (!validateBundleStructure(bundle)) {
+    throw new Error('Invalid vault backup: missing vault or attachments');
+  }
 
   if (mode === 'replace') {
     await importVaultBundleReplace(bundle, password);

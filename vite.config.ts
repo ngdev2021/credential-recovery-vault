@@ -4,6 +4,10 @@ import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: 'node',
+    include: ['**/*.test.ts', '**/*.test.tsx'],
+  },
   resolve: {
     alias: {
       '@': resolve(__dirname, './src'),

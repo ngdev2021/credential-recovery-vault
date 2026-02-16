@@ -1,11 +1,12 @@
 import { app } from 'electron';
-import { randomUUID } from 'crypto';
+import { randomUUID, randomBytes } from 'crypto';
 import { readFile, writeFile, mkdir, rename } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { encryptVault, decryptVault } from './crypto/vaultCrypto';
 import { readAttachmentBlobRaw, writeAttachmentBlobRaw, deleteAllAttachmentBlobs } from './attachmentsStore';
-import type { EncryptedVault, VaultPayload, VaultItem, VaultExportBundle } from '../shared/types/vault';
+import type { EncryptedVault, VaultPayload, VaultItem, VaultExportBundle, VaultAttachment } from '../shared/types/vault';
+import { remapAttachmentInItem } from '../shared/utils/vaultMerge';
 
 const VAULT_FILENAME = 'vault.enc.json';
 
@@ -138,12 +139,48 @@ export async function importVaultBundleMerge(
   const existingEncrypted = await readEncryptedVault();
   const importedPayload = await decryptVault(bundle.vault, importPassword);
 
+  const refIds = collectAttachmentIds(importedPayload);
+  for (const id of refIds) {
+    if (!(id in bundle.attachments)) {
+      throw new Error(`Backup references attachment ${id} which is missing from the file`);
+    }
+  }
+
   if (!existingEncrypted) {
     await importVaultBundleReplace(bundle, importPassword);
     return importedPayload;
   }
 
   const existingPayload = await decryptVault(existingEncrypted, currentPassword);
+  const existingAttachmentById = new Map<string, VaultAttachment>();
+  for (const item of existingPayload.items) {
+    for (const a of item.attachments ?? []) {
+      existingAttachmentById.set(a.id, a);
+    }
+  }
+
+  const idMap = new Map<string, string>();
+  const blobsToWrite: { id: string; b64: string }[] = [];
+  const importedAttachmentById = new Map<string, { att: VaultAttachment; b64: string }>();
+  for (const item of importedPayload.items) {
+    for (const a of item.attachments ?? []) {
+      const b64 = bundle.attachments[a.id];
+      if (b64) importedAttachmentById.set(a.id, { att: a, b64 });
+    }
+  }
+
+  for (const [id, { att: importedAtt, b64 }] of importedAttachmentById) {
+    const existingAtt = existingAttachmentById.get(id);
+    if (existingAtt && existingAtt.sha256 !== importedAtt.sha256) {
+      const newId = randomBytes(16).toString('hex');
+      idMap.set(id, newId);
+      blobsToWrite.push({ id: newId, b64 });
+    } else if (!existingAtt) {
+      const targetId = idMap.get(id) ?? id;
+      blobsToWrite.push({ id: targetId, b64 });
+    }
+  }
+
   const mergedItems: VaultItem[] = [];
   const seenIds = new Set<string>(existingPayload.items.map((i) => i.id));
 
@@ -153,8 +190,12 @@ export async function importVaultBundleMerge(
   for (const item of importedPayload.items) {
     if (!seenIds.has(item.id)) {
       seenIds.add(item.id);
-      mergedItems.push(item);
+      mergedItems.push(remapAttachmentInItem(item, idMap));
     }
+  }
+
+  for (const { id, b64 } of blobsToWrite) {
+    await writeAttachmentBlobRaw(id, Buffer.from(b64, 'base64'));
   }
 
   const mergedPayload: VaultPayload = {
@@ -169,16 +210,5 @@ export async function importVaultBundleMerge(
 
   const encrypted = await encryptVault(mergedPayload, currentPassword);
   await writeEncryptedVault(encrypted);
-
-  for (const [id, b64] of Object.entries(bundle.attachments)) {
-    try {
-      const existingIds = collectAttachmentIds(existingPayload);
-      if (!existingIds.has(id)) {
-        await writeAttachmentBlobRaw(id, Buffer.from(b64, 'base64'));
-      }
-    } catch {
-      // skip on error
-    }
-  }
   return mergedPayload;
 }

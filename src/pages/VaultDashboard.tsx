@@ -115,18 +115,23 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
     onLock();
   };
 
+  const handleLockedError = (err: unknown) => {
+    if (err instanceof Error && err.message.includes('locked')) onLock();
+    else alert(err instanceof Error ? err.message : 'Operation failed');
+  };
+
   const handleAddItem = (item: Omit<VaultItem, 'id' | 'createdAt' | 'updatedAt'>) => {
     window.vault.addItem(item).then(() => {
       refreshItems();
       setShowAddForm(false);
-    });
+    }).catch(handleLockedError);
   };
 
   const handleUpdateItem = (id: string, updates: Partial<VaultItem>) => {
     window.vault.updateItem(id, updates).then(() => {
       refreshItems();
       setSelectedItem(null);
-    });
+    }).catch(handleLockedError);
   };
 
   const handleDeleteItem = (id: string) => {
@@ -134,7 +139,7 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
       window.vault.deleteItem(id).then(() => {
         refreshItems();
         setSelectedItem(null);
-      });
+      }).catch(handleLockedError);
     }
   };
 
@@ -147,7 +152,8 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
         alert(`Exported to ${result.path}`);
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Export failed');
+      if (err instanceof Error && err.message.includes('locked')) onLock();
+      else alert(err instanceof Error ? err.message : 'Export failed');
     }
   };
 
@@ -170,7 +176,8 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
       setImportFilePath(null);
       setImportPassword('');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Import failed');
+      if (err instanceof Error && err.message.includes('locked')) onLock();
+      else alert(err instanceof Error ? err.message : 'Import failed');
     }
   };
 
@@ -301,6 +308,7 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
             mode="add"
             onSave={handleAddItem}
             onCancel={() => setShowAddForm(false)}
+            onLocked={onLock}
           />
         )}
 
@@ -311,6 +319,7 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
             onSave={(updates) => handleUpdateItem(selectedItem.id, updates)}
             onDelete={() => handleDeleteItem(selectedItem.id)}
             onCancel={() => setSelectedItem(null)}
+            onLocked={onLock}
             onAttachmentsChange={async () => {
               const state = await window.vault.getState();
               if (state) {
