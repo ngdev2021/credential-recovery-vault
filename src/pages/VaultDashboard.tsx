@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { VaultMetadata, VaultItem } from '../../shared/types/vault';
 import { VaultItemList } from '../components/VaultItemList';
 import { VaultItemForm } from '../components/VaultItemForm';
+import { EmergencyKitModal } from '../components/EmergencyKitModal';
 
 const AUTO_LOCK_MS = 5 * 60 * 1000; // 5 minutes (config later)
 
@@ -23,15 +24,6 @@ const styles: Record<string, React.CSSProperties> = {
   headerLeft: { display: 'flex', alignItems: 'center', gap: 16 },
   title: { fontSize: 18, fontWeight: 600 },
   meta: { color: 'var(--text-secondary)', fontSize: 13 },
-  search: {
-    padding: '8px 14px',
-    background: 'var(--bg-tertiary)',
-    border: '1px solid var(--border)',
-    borderRadius: 8,
-    color: 'var(--text-primary)',
-    fontSize: 14,
-    width: 280,
-  },
   lockBtn: {
     padding: '8px 16px',
     background: 'transparent',
@@ -56,8 +48,6 @@ interface VaultDashboardProps {
 
 export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDashboardProps) {
   const [items, setItems] = useState<VaultItem[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filteredItems, setFilteredItems] = useState<VaultItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<VaultItem | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -101,14 +91,6 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
       window.removeEventListener('mousedown', reset);
     };
   }, [onLock]);
-
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredItems(items);
-      return;
-    }
-    window.vault.search(searchQuery).then(setFilteredItems);
-  }, [searchQuery, items]);
 
   const handleLock = async () => {
     await window.vault.lock();
@@ -186,8 +168,6 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
     : null;
   const backupStatus = backupDaysAgo === null ? 'none' : backupDaysAgo <= 30 ? 'ok' : backupDaysAgo <= 60 ? 'warn' : 'critical';
 
-  const displayItems = searchQuery.trim() ? filteredItems : items;
-
   return (
     <div style={styles.layout}>
       <header style={styles.header}>
@@ -209,13 +189,6 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
               )}
             </span>
           </div>
-          <input
-            type="search"
-            placeholder="Search by title, domain, tags..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={styles.search}
-          />
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button style={styles.lockBtn} onClick={() => setShowEmergencyKit(true)} title="Generate printable emergency kit">
@@ -239,24 +212,11 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
       </header>
 
       {showEmergencyKit && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: 'white', color: '#333', padding: 32, maxWidth: 480, width: '90%', borderRadius: 12 }}>
-            <h2 style={{ marginBottom: 16 }}>Emergency Recovery Kit</h2>
-            <p style={{ fontSize: 14, marginBottom: 12 }}>Print this page and store it securely.</p>
-            <div style={{ fontSize: 13, fontFamily: 'monospace', background: '#f5f5f5', padding: 16, borderRadius: 8, marginBottom: 16 }}>
-              <p><strong>Vault ID:</strong> {metadata.id}</p>
-              <p><strong>Items:</strong> {metadata.itemCount}</p>
-              <p><strong>Last backup:</strong> {lastBackup ? new Date(lastBackup.exportedAt).toLocaleString() : 'Never'}</p>
-            </div>
-            <p style={{ fontSize: 12, color: '#666', marginBottom: 16 }}>
-              Your master password is the only way to unlock this vault. Store it separately. To restore: use Import in the app with your backup file.
-            </p>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => window.print()} style={{ padding: '8px 16px', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: 8 }}>Print</button>
-              <button onClick={() => setShowEmergencyKit(false)} style={styles.lockBtn}>Close</button>
-            </div>
-          </div>
-        </div>
+        <EmergencyKitModal
+          metadata={metadata}
+          lastBackup={lastBackup}
+          onClose={() => setShowEmergencyKit(false)}
+        />
       )}
 
       {showImportModal && importFilePath && (
@@ -298,7 +258,7 @@ export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDas
 
       <main style={styles.content}>
         <VaultItemList
-          items={displayItems}
+          items={items}
           onSelect={setSelectedItem}
           onAdd={() => setShowAddForm(true)}
         />
