@@ -38,10 +38,28 @@ const vaultApi = {
     ipcRenderer.invoke('vault:importBundle', filePath, password, mode),
 };
 
+const vaultSyncApi = {
+  getStatus: () => ipcRenderer.invoke('vaultSync:getStatus'),
+  configure: (config: { serverUrl: string; deviceName: string; syncToken?: string }) =>
+    ipcRenderer.invoke('vaultSync:configure', config),
+  start: () => ipcRenderer.invoke('vaultSync:start'),
+  stop: () => ipcRenderer.invoke('vaultSync:stop'),
+  pushOnce: () => ipcRenderer.invoke('vaultSync:pushOnce'),
+  pullOnce: () => ipcRenderer.invoke('vaultSync:pullOnce'),
+  applyRemote: (password: string) => ipcRenderer.invoke('vaultSync:applyRemote', password),
+  onStatus: (handler: (status: unknown) => void) => {
+    const listener = (_: unknown, status: unknown) => handler(status);
+    ipcRenderer.on('vaultSync:status', listener);
+    return () => ipcRenderer.removeListener('vaultSync:status', listener);
+  },
+};
+
 contextBridge.exposeInMainWorld('vault', vaultApi);
+contextBridge.exposeInMainWorld('vaultSync', vaultSyncApi);
 
 declare global {
   interface Window {
     vault: typeof vaultApi;
+    vaultSync: typeof vaultSyncApi;
   }
 }

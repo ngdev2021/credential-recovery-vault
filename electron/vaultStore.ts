@@ -89,11 +89,11 @@ export async function importVaultEncrypted(
   await writeEncryptedVault(encrypted);
 }
 
-function collectAttachmentIds(payload: VaultPayload): Set<string> {
-  const ids = new Set<string>();
+export function collectAttachmentIds(payload: VaultPayload): string[] {
+  const ids: string[] = [];
   for (const item of payload.items) {
     for (const a of item.attachments ?? []) {
-      ids.add(a.id);
+      ids.push(a.id);
     }
   }
   return ids;
