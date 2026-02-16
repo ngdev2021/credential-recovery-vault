@@ -11,6 +11,7 @@ import {
   exportVaultBundle,
   importVaultBundleReplace,
   importVaultBundleMerge,
+  collectAttachmentIds,
 } from './vaultStore';
 import {
   saveEncryptedAttachment,
@@ -20,6 +21,17 @@ import {
 } from './attachmentsStore';
 import { getVaultKey } from './crypto/vaultCrypto';
 import { saveLastBackupInfo, getLastBackupInfo } from './backupStore';
+import {
+  getStatus,
+  configure,
+  start,
+  stop,
+  pushOnce,
+  pullOnce,
+  applyRemoteEnvelope,
+  onStatus,
+  bumpRevision,
+} from './sync/syncEngine';
 import type { VaultPayload, VaultItem, EncryptedVault, VaultAttachment, VaultExportBundle } from '../shared/types/vault';
 import { v4 as uuidv4 } from 'uuid';
 import { writeFile, readFile, mkdtemp } from 'fs/promises';
@@ -144,6 +156,7 @@ ipcMain.handle('vault:addItem', async (_, item: Omit<VaultItem, 'id' | 'createdA
   decryptedPayload.metadata.tags = Array.from(allTags);
 
   await saveVault(masterPassword, decryptedPayload);
+  await bumpRevision();
   return newItem;
 });
 
@@ -167,6 +180,7 @@ ipcMain.handle('vault:updateItem', async (_, id: string, updates: Partial<VaultI
   decryptedPayload.metadata.tags = Array.from(allTags);
 
   await saveVault(masterPassword, decryptedPayload);
+  await bumpRevision();
   return decryptedPayload.items[index];
 });
 
@@ -187,6 +201,7 @@ ipcMain.handle('vault:deleteItem', async (_, id: string) => {
   decryptedPayload.items.forEach((i) => i.tags.forEach((t) => allTags.add(t)));
   decryptedPayload.metadata.tags = Array.from(allTags);
   await saveVault(masterPassword, decryptedPayload);
+  await bumpRevision();
   return { success: true };
 });
 
@@ -346,6 +361,7 @@ ipcMain.handle('vault:attachFile', async (_, itemId: string) => {
   };
 
   await saveVault(masterPassword, decryptedPayload);
+  await bumpRevision();
   return attachment;
 });
 
@@ -366,6 +382,7 @@ ipcMain.handle('vault:removeAttachment', async (_, itemId: string, attachmentId:
 
   await deleteAttachmentBlob(attachmentId);
   await saveVault(masterPassword, decryptedPayload);
+  await bumpRevision();
   return { success: true };
 });
 
@@ -389,4 +406,43 @@ ipcMain.handle('vault:openAttachment', async (_, attachmentId: string) => {
   await writeFile(tmpPath, decrypted);
   await shell.openPath(tmpPath);
   return { success: true };
+});
+
+// --- vaultSync IPC ---
+onStatus((status) => {
+  mainWindow?.webContents.send('vaultSync:status', status);
+});
+
+ipcMain.handle('vaultSync:getStatus', async () => getStatus());
+
+ipcMain.handle('vaultSync:configure', async (_, config: { serverUrl: string; deviceName: string; syncToken?: string }) =>
+  configure(config)
+);
+
+ipcMain.handle('vaultSync:start', async () => start());
+
+ipcMain.handle('vaultSync:stop', () => {
+  stop();
+  return undefined;
+});
+
+ipcMain.handle('vaultSync:pushOnce', async () => {
+  if (!decryptedPayload) throw new Error('Vault is locked');
+  const ids = collectAttachmentIds(decryptedPayload);
+  return pushOnce(ids);
+});
+
+ipcMain.handle('vaultSync:pullOnce', async () => pullOnce());
+
+ipcMain.handle('vaultSync:applyRemote', async (_, password: string) => {
+  const status = await applyRemoteEnvelope(password);
+  if (status.state === 'configured') {
+    const payload = await unlockVault(password);
+    const encrypted = await readEncryptedVault();
+    if (encrypted) vaultKey = await getVaultKey(password, encrypted.salt);
+    decryptedPayload = payload;
+    masterPassword = password;
+    return { ...status, refreshed: true, items: payload.items };
+  }
+  return status;
 });
