@@ -1,17 +1,22 @@
 import { app } from 'electron';
 import { randomUUID } from 'crypto';
-import { readFile, writeFile, mkdir, rename, unlink } from 'fs/promises';
+import { readFile, writeFile, mkdir, rename, unlink, rm } from 'fs/promises';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import { encryptVault, decryptVault } from './crypto/vaultCrypto';
-import { deleteAllAttachmentBlobs, readAttachmentBlobRaw, writeAttachmentBlobRaw } from './attachmentsStore';
+import { readAttachmentBlobRaw, writeAttachmentBlobRaw } from './attachmentsStore';
 import { getAttachmentBlobIds, mergeVaultPayloads } from './importMerge';
 import type { EncryptedVault, VaultExportBundle, VaultPayload } from '../shared/types/vault';
 
 const VAULT_FILENAME = 'vault.enc.json';
+const ATTACHMENTS_DIRNAME = 'attachments';
 
 function getVaultPath(): string {
   return join(app.getPath('userData'), VAULT_FILENAME);
+}
+
+function getAttachmentsPath(): string {
+  return join(app.getPath('userData'), ATTACHMENTS_DIRNAME);
 }
 
 async function atomicWriteTextFile(filePath: string, content: string): Promise<void> {
@@ -23,6 +28,52 @@ async function atomicWriteTextFile(filePath: string, content: string): Promise<v
     await rename(tmpPath, filePath);
   } catch (error) {
     await unlink(tmpPath).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function stageAttachments(bundle: VaultExportBundle): Promise<string> {
+  const userData = app.getPath('userData');
+  const stageDir = join(userData, `${ATTACHMENTS_DIRNAME}.stage.${Date.now()}`);
+  await mkdir(stageDir, { recursive: true });
+
+  try {
+    for (const [id, b64] of Object.entries(bundle.attachments)) {
+      const finalPath = join(stageDir, `${id}.bin`);
+      const tmpPath = `${finalPath}.tmp`;
+      await writeFile(tmpPath, Buffer.from(b64, 'base64'));
+      await rename(tmpPath, finalPath);
+    }
+    return stageDir;
+  } catch (error) {
+    await rm(stageDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function swapAttachmentsDirectory(stagedDir: string): Promise<void> {
+  const attachmentsPath = getAttachmentsPath();
+  const backupDir = `${attachmentsPath}.backup.${Date.now()}`;
+
+  let hasBackup = false;
+  try {
+    if (existsSync(attachmentsPath)) {
+      await rename(attachmentsPath, backupDir);
+      hasBackup = true;
+    }
+
+    await rename(stagedDir, attachmentsPath);
+
+    if (hasBackup) {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    if (!existsSync(attachmentsPath) && existsSync(stagedDir)) {
+      await rename(stagedDir, attachmentsPath).catch(() => undefined);
+    }
+    if (hasBackup && existsSync(backupDir) && !existsSync(attachmentsPath)) {
+      await rename(backupDir, attachmentsPath).catch(() => undefined);
+    }
     throw error;
   }
 }
@@ -92,18 +143,17 @@ export async function exportVaultBundle(masterPassword: string, payload: VaultPa
 export async function importVaultBundleReplace(bundle: VaultExportBundle, masterPassword: string): Promise<void> {
   await decryptVault(bundle.vault, masterPassword);
 
-  const writtenAttachmentIds: string[] = [];
+  const currentVault = await readEncryptedVault();
+  const stagedAttachmentsDir = await stageAttachments(bundle);
+
   try {
-    await deleteAllAttachmentBlobs();
-    for (const [id, b64] of Object.entries(bundle.attachments)) {
-      await writeAttachmentBlobRaw(id, Buffer.from(b64, 'base64'));
-      writtenAttachmentIds.push(id);
-    }
     await writeEncryptedVault(bundle.vault);
+    await swapAttachmentsDirectory(stagedAttachmentsDir);
   } catch (error) {
-    for (const id of writtenAttachmentIds) {
-      await unlink(join(app.getPath('userData'), 'attachments', `${id}.bin`)).catch(() => undefined);
+    if (currentVault) {
+      await writeEncryptedVault(currentVault).catch(() => undefined);
     }
+    await rm(stagedAttachmentsDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
 }

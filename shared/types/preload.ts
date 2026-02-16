@@ -37,7 +37,7 @@ export interface VaultApi {
   readAndParseRecoveryFile: (filePath: string) => Promise<ReadRecoveryFileResult>;
   attachFile: (itemId: string) => Promise<VaultAttachment | null>;
   removeAttachment: (itemId: string, attachmentId: string) => Promise<{ success: true }>;
-  openAttachment: (attachmentId: string) => Promise<void>;
+  openAttachment: (attachmentId: string) => Promise<string>;
   exportBundle: () => Promise<{ path: string } | null>;
   importBundleReplace: (filePath: string, password: string) => Promise<{ success: true; metadata: VaultMetadata; items: VaultItem[] }>;
   importBundleMerge: (filePath: string, password: string) => Promise<{ success: true; metadata: VaultMetadata; items: VaultItem[] }>;

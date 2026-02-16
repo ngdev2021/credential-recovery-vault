@@ -1,4 +1,4 @@
-import type { RecoveryCode } from '../../shared/types/vault';
+import type { RecoveryCode } from '../types/vault';
 
 const HEADER_PATTERNS = /^(backup codes?|recovery codes?|save these codes?|emergency codes?):?\s*$/i;
 
