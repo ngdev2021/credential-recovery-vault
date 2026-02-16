@@ -203,6 +203,7 @@ export function VaultItemForm({
   const [usernamesStr, setUsernamesStr] = useState('');
   const [tagsStr, setTagsStr] = useState('');
   const [importPreview, setImportPreview] = useState<{ filename: string; count: number; duplicates: number } | null>(null);
+  const [showUnusedOnly, setShowUnusedOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -259,6 +260,32 @@ export function VaultItemForm({
     setForm((f) => ({
       ...f,
       recoveryCodes: (f.recoveryCodes ?? []).filter((c) => c.id !== id),
+    }));
+  };
+
+  const toggleRecoveryCodeUsed = (id: string) => {
+    setForm((f) => ({
+      ...f,
+      recoveryCodes: (f.recoveryCodes ?? []).map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              status: c.status === 'used' ? ('unused' as const) : ('used' as const),
+            }
+          : c
+      ),
+    }));
+  };
+
+  const rotateRecoveryCodes = () => {
+    const now = new Date().toISOString();
+    setForm((f) => ({
+      ...f,
+      recoveryCodes: (f.recoveryCodes ?? []).map((c) =>
+        c.status === 'unused' || c.status === 'used'
+          ? { ...c, status: 'replaced' as const, rotatedAt: now }
+          : c
+      ),
     }));
   };
 
@@ -410,13 +437,25 @@ export function VaultItemForm({
           </div>
           <div style={styles.row}>
             <label style={styles.label}>Password</label>
-            <input
-              type="password"
-              style={styles.input}
-              value={form.password}
-              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-              placeholder="Optional if using password manager"
-            />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="password"
+                style={styles.input}
+                value={form.password}
+                onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                placeholder="Optional if using password manager"
+              />
+              {form.password && (
+                <button
+                  type="button"
+                  style={styles.addCodeBtn}
+                  onClick={() => window.vault.copyWithTimeout(form.password)}
+                  title="Copy (clears in 30s)"
+                >
+                  Copy
+                </button>
+              )}
+            </div>
           </div>
 
           <div style={styles.codesSection}>
@@ -428,7 +467,7 @@ export function VaultItemForm({
               style={{ display: 'none' }}
               onChange={handleUploadFile}
             />
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
               <button type="button" style={styles.addCodeBtn} onClick={addRecoveryCode}>
                 + Add recovery code
               </button>
@@ -448,6 +487,19 @@ export function VaultItemForm({
               >
                 Import from file…
               </button>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)' }}>
+                <input
+                  type="checkbox"
+                  checked={showUnusedOnly}
+                  onChange={(e) => setShowUnusedOnly(e.target.checked)}
+                />
+                Show unused only
+              </label>
+              {(form.recoveryCodes ?? []).some((c) => c.status === 'unused' || c.status === 'used') && (
+                <button type="button" style={styles.addCodeBtn} onClick={rotateRecoveryCodes} title="Archive current set and add new codes">
+                  Rotate set
+                </button>
+              )}
             </div>
             {importPreview && (
               <div style={{ marginBottom: 12, padding: 10, background: 'var(--bg-tertiary)', borderRadius: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
@@ -461,24 +513,45 @@ export function VaultItemForm({
                 )}
               </div>
             )}
-            {(form.recoveryCodes ?? []).map((c) => (
-              <div key={c.id} style={styles.codeRow}>
-                <input
-                  type="password"
-                  style={styles.codeInput}
-                  value={c.code}
-                  onChange={(e) => updateRecoveryCode(c.id, e.target.value)}
-                  placeholder="Code"
-                />
-                <button
-                  type="button"
-                  style={styles.addCodeBtn}
-                  onClick={() => removeRecoveryCode(c.id)}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
+            {(form.recoveryCodes ?? [])
+              .filter((c) => !showUnusedOnly || c.status === 'unused')
+              .map((c) => (
+                <div key={c.id} style={{ ...styles.codeRow, opacity: c.status === 'replaced' || c.status === 'invalid' ? 0.6 : 1 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 70, fontSize: 12, color: 'var(--text-secondary)' }} title={c.status}>
+                    <input
+                      type="checkbox"
+                      checked={c.status === 'used'}
+                      onChange={() => toggleRecoveryCodeUsed(c.id)}
+                      title={c.status === 'used' ? 'Mark as unused' : 'Mark as used'}
+                    />
+                    {c.status === 'used' ? 'Used' : c.status === 'replaced' ? 'Replaced' : 'Unused'}
+                  </label>
+                  <input
+                    type="password"
+                    style={styles.codeInput}
+                    value={c.code}
+                    onChange={(e) => updateRecoveryCode(c.id, e.target.value)}
+                    placeholder="Code"
+                  />
+                  {c.code && (
+                    <button
+                      type="button"
+                      style={styles.addCodeBtn}
+                      onClick={() => window.vault.copyWithTimeout(c.code)}
+                      title="Copy (clears in 30s)"
+                    >
+                      Copy
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    style={styles.addCodeBtn}
+                    onClick={() => removeRecoveryCode(c.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
           </div>
 
           {mode === 'edit' && item && (

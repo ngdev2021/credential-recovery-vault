@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { CreateVault } from './pages/CreateVault';
 import { UnlockVault } from './pages/UnlockVault';
 import { VaultDashboard } from './pages/VaultDashboard';
@@ -11,21 +11,36 @@ function App() {
   const [metadata, setMetadata] = useState<VaultMetadata | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function init() {
-      const exists = await window.vault.exists();
-      if (exists) {
-        const state = await window.vault.getState();
-        if (state) {
-          setMetadata(state.metadata);
-          setAppState('vault');
+      try {
+        const exists = await window.vault.exists();
+        if (cancelled) return;
+
+        if (exists) {
+          const state = await window.vault.getState();
+          if (cancelled) return;
+
+          if (state) {
+            setMetadata(state.metadata);
+            setAppState('vault');
+          } else {
+            setAppState('unlock');
+          }
         } else {
-          setAppState('unlock');
+          setAppState('create');
         }
-      } else {
-        setAppState('create');
+      } catch (e) {
+        console.error('Vault init failed:', e);
+        if (!cancelled) setAppState('unlock');
       }
     }
+
     init();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onVaultCreated = (meta: VaultMetadata) => {
@@ -38,10 +53,20 @@ function App() {
     setAppState('vault');
   };
 
-  const onLock = () => {
+  const onLock = useCallback(() => {
     setMetadata(null);
     setAppState('unlock');
-  };
+  }, []);
+
+  useEffect(() => {
+    const handler = () => onLock();
+    window.addEventListener('vault-locked', handler);
+    return () => window.removeEventListener('vault-locked', handler);
+  }, [onLock]);
+
+  const handleVaultDataChange = useCallback((meta: VaultMetadata) => {
+    setMetadata(meta);
+  }, []);
 
   if (appState === 'loading') {
     return (
@@ -59,7 +84,17 @@ function App() {
     return <UnlockVault onUnlocked={onVaultUnlocked} />;
   }
 
-  return <VaultDashboard metadata={metadata!} onLock={onLock} />;
+  if (appState === 'vault' && metadata) {
+    return (
+      <VaultDashboard
+        metadata={metadata}
+        onLock={onLock}
+        onVaultDataChange={handleVaultDataChange}
+      />
+    );
+  }
+
+  return <UnlockVault onUnlocked={onVaultUnlocked} />;
 }
 
 export default App;

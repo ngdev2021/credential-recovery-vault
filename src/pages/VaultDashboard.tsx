@@ -3,6 +3,8 @@ import type { VaultMetadata, VaultItem } from '../../shared/types/vault';
 import { VaultItemList } from '../components/VaultItemList';
 import { VaultItemForm } from '../components/VaultItemForm';
 
+const AUTO_LOCK_MS = 5 * 60 * 1000; // 5 minutes (config later)
+
 const styles: Record<string, React.CSSProperties> = {
   layout: {
     minHeight: '100vh',
@@ -49,14 +51,20 @@ const styles: Record<string, React.CSSProperties> = {
 interface VaultDashboardProps {
   metadata: VaultMetadata;
   onLock: () => void;
+  onVaultDataChange?: (metadata: VaultMetadata) => void;
 }
 
-export function VaultDashboard({ metadata, onLock }: VaultDashboardProps) {
+export function VaultDashboard({ metadata, onLock, onVaultDataChange }: VaultDashboardProps) {
   const [items, setItems] = useState<VaultItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredItems, setFilteredItems] = useState<VaultItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<VaultItem | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFilePath, setImportFilePath] = useState<string | null>(null);
+  const [importPassword, setImportPassword] = useState('');
+  const [lastBackup, setLastBackup] = useState<{ path: string; exportedAt: string } | null>(null);
+  const [showEmergencyKit, setShowEmergencyKit] = useState(false);
 
   async function refreshItems() {
     const state = await window.vault.getState();
@@ -66,6 +74,33 @@ export function VaultDashboard({ metadata, onLock }: VaultDashboardProps) {
   useEffect(() => {
     refreshItems();
   }, []);
+
+  useEffect(() => {
+    window.vault.getLastBackup().then(setLastBackup);
+  }, []);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        await window.vault.lock();
+        onLock();
+      }, AUTO_LOCK_MS);
+    };
+
+    window.addEventListener('mousemove', reset);
+    window.addEventListener('keydown', reset);
+    window.addEventListener('mousedown', reset);
+    reset();
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('mousemove', reset);
+      window.removeEventListener('keydown', reset);
+      window.removeEventListener('mousedown', reset);
+    };
+  }, [onLock]);
 
   useEffect(() => {
     if (!searchQuery.trim()) {
@@ -103,6 +138,47 @@ export function VaultDashboard({ metadata, onLock }: VaultDashboardProps) {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const result = await window.vault.exportBundle();
+      if (result) {
+        const info = await window.vault.getLastBackup();
+        if (info) setLastBackup(info);
+        alert(`Exported to ${result.path}`);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Export failed');
+    }
+  };
+
+  const handleImportClick = async () => {
+    const path = await window.vault.pickFile({ forBundle: true });
+    if (path) {
+      setImportFilePath(path);
+      setImportPassword('');
+      setShowImportModal(true);
+    }
+  };
+
+  const handleImportConfirm = async (mode: 'replace' | 'merge') => {
+    if (!importFilePath || !importPassword) return;
+    try {
+      const result = await window.vault.importBundle(importFilePath, importPassword, mode);
+      onVaultDataChange?.(result.metadata as VaultMetadata);
+      await refreshItems();
+      setShowImportModal(false);
+      setImportFilePath(null);
+      setImportPassword('');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Import failed');
+    }
+  };
+
+  const backupDaysAgo = lastBackup
+    ? Math.floor((Date.now() - new Date(lastBackup.exportedAt).getTime()) / (24 * 60 * 60 * 1000))
+    : null;
+  const backupStatus = backupDaysAgo === null ? 'none' : backupDaysAgo <= 30 ? 'ok' : backupDaysAgo <= 60 ? 'warn' : 'critical';
+
   const displayItems = searchQuery.trim() ? filteredItems : items;
 
   return (
@@ -113,6 +189,17 @@ export function VaultDashboard({ metadata, onLock }: VaultDashboardProps) {
             <h1 style={styles.title}>Credential Vault</h1>
             <span style={styles.meta}>
               {metadata.itemCount} items · Updated {new Date(metadata.updatedAt).toLocaleDateString()}
+              {backupDaysAgo !== null && (
+                <span
+                  style={{
+                    marginLeft: 8,
+                    color: backupStatus === 'ok' ? 'var(--success)' : backupStatus === 'warn' ? 'var(--warning)' : 'var(--danger)',
+                  }}
+                  title={lastBackup?.path}
+                >
+                  · Backup: {backupDaysAgo === 0 ? 'Today' : backupDaysAgo === 1 ? '1 day ago' : `${backupDaysAgo} days ago`}
+                </span>
+              )}
             </span>
           </div>
           <input
@@ -123,15 +210,84 @@ export function VaultDashboard({ metadata, onLock }: VaultDashboardProps) {
             style={styles.search}
           />
         </div>
-        <button
-          style={styles.lockBtn}
-          onClick={handleLock}
-          onMouseEnter={(e) => Object.assign(e.currentTarget.style, styles.lockBtnHover)}
-          onMouseLeave={(e) => { e.currentTarget.style.color = ''; e.currentTarget.style.borderColor = ''; }}
-        >
-          Lock vault
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button style={styles.lockBtn} onClick={() => setShowEmergencyKit(true)} title="Generate printable emergency kit">
+            Emergency kit
+          </button>
+          <button style={styles.lockBtn} onClick={handleExport} title="Export vault + attachments">
+            Export
+          </button>
+          <button style={styles.lockBtn} onClick={handleImportClick} title="Import vault backup">
+            Import
+          </button>
+          <button
+            style={styles.lockBtn}
+            onClick={handleLock}
+            onMouseEnter={(e) => Object.assign(e.currentTarget.style, styles.lockBtnHover)}
+            onMouseLeave={(e) => { e.currentTarget.style.color = ''; e.currentTarget.style.borderColor = ''; }}
+          >
+            Lock now
+          </button>
+        </div>
       </header>
+
+      {showEmergencyKit && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: 'white', color: '#333', padding: 32, maxWidth: 480, width: '90%', borderRadius: 12 }}>
+            <h2 style={{ marginBottom: 16 }}>Emergency Recovery Kit</h2>
+            <p style={{ fontSize: 14, marginBottom: 12 }}>Print this page and store it securely.</p>
+            <div style={{ fontSize: 13, fontFamily: 'monospace', background: '#f5f5f5', padding: 16, borderRadius: 8, marginBottom: 16 }}>
+              <p><strong>Vault ID:</strong> {metadata.id}</p>
+              <p><strong>Items:</strong> {metadata.itemCount}</p>
+              <p><strong>Last backup:</strong> {lastBackup ? new Date(lastBackup.exportedAt).toLocaleString() : 'Never'}</p>
+            </div>
+            <p style={{ fontSize: 12, color: '#666', marginBottom: 16 }}>
+              Your master password is the only way to unlock this vault. Store it separately. To restore: use Import in the app with your backup file.
+            </p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => window.print()} style={{ padding: '8px 16px', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: 8 }}>Print</button>
+              <button onClick={() => setShowEmergencyKit(false)} style={styles.lockBtn}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showImportModal && importFilePath && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 12, padding: 24, maxWidth: 400, width: '90%' }}>
+            <h3 style={{ marginBottom: 16 }}>Import vault backup</h3>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>{importFilePath.split('/').pop()}</p>
+            <input
+              type="password"
+              placeholder="Password for backup file"
+              value={importPassword}
+              onChange={(e) => setImportPassword(e.target.value)}
+              style={{ width: '100%', padding: 10, marginBottom: 16, background: 'var(--bg-tertiary)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)' }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button style={styles.lockBtn} onClick={() => { setShowImportModal(false); setImportFilePath(null); }}>Cancel</button>
+              <button style={{ ...styles.lockBtn, color: 'var(--warning)' }} onClick={() => handleImportConfirm('merge')} disabled={!importPassword}>Merge</button>
+              <button style={{ ...styles.lockBtn, color: 'var(--danger)' }} onClick={() => handleImportConfirm('replace')} disabled={!importPassword} title="Replace current vault entirely">Replace</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {backupStatus === 'none' && (
+        <div style={{ padding: '8px 24px', background: 'rgba(210, 153, 34, 0.2)', color: 'var(--warning)', fontSize: 13 }}>
+          No backup yet. Export your vault to a file for safekeeping.
+        </div>
+      )}
+      {backupStatus === 'warn' && (
+        <div style={{ padding: '8px 24px', background: 'rgba(210, 153, 34, 0.2)', color: 'var(--warning)', fontSize: 13 }}>
+          Backup is {backupDaysAgo} days old. Export your vault to stay safe.
+        </div>
+      )}
+      {backupStatus === 'critical' && (
+        <div style={{ padding: '8px 24px', background: 'rgba(248, 81, 73, 0.2)', color: 'var(--danger)', fontSize: 13 }}>
+          No recent backup ({backupDaysAgo} days). Export now to avoid losing access.
+        </div>
+      )}
 
       <main style={styles.content}>
         <VaultItemList

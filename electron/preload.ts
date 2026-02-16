@@ -1,4 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
+
+ipcRenderer.on('vault:locked', () => {
+  window.dispatchEvent(new Event('vault-locked'));
+});
 import type { VaultItem, EncryptedVault, VaultAttachment } from '../shared/types/vault';
 
 const vaultApi = {
@@ -18,7 +22,7 @@ const vaultApi = {
     ipcRenderer.invoke('vault:exportEncrypted', password),
   importEncrypted: (encrypted: EncryptedVault, password: string) =>
     ipcRenderer.invoke('vault:importEncrypted', encrypted, password),
-  pickFile: (options?: { forImport?: boolean }) =>
+  pickFile: (options?: { forImport?: boolean; forBundle?: boolean }) =>
     ipcRenderer.invoke('vault:pickFile', options),
   readAndParseRecoveryFile: (filePath: string) =>
     ipcRenderer.invoke('vault:readAndParseRecoveryFile', filePath),
@@ -27,6 +31,11 @@ const vaultApi = {
     ipcRenderer.invoke('vault:removeAttachment', itemId, attachmentId),
   openAttachment: (attachmentId: string) =>
     ipcRenderer.invoke('vault:openAttachment', attachmentId),
+  exportBundle: () => ipcRenderer.invoke('vault:exportBundle'),
+  getLastBackup: () => ipcRenderer.invoke('vault:getLastBackup'),
+  copyWithTimeout: (text: string) => ipcRenderer.invoke('vault:copyWithTimeout', text),
+  importBundle: (filePath: string, password: string, mode: 'replace' | 'merge') =>
+    ipcRenderer.invoke('vault:importBundle', filePath, password, mode),
 };
 
 contextBridge.exposeInMainWorld('vault', vaultApi);

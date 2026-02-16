@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import { join, basename, extname } from 'path';
-import { readFile, writeFile, mkdir, unlink } from 'fs/promises';
+import { readFile, writeFile, mkdir, unlink, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomBytes, createHash } from 'crypto';
 import { xchacha20poly1305 } from '@noble/ciphers/chacha';
@@ -111,5 +111,28 @@ export async function deleteAttachmentBlob(attachmentId: string): Promise<void> 
   const blobPath = getBlobPath(attachmentId);
   if (existsSync(blobPath)) {
     await unlink(blobPath);
+  }
+}
+
+export async function readAttachmentBlobRaw(attachmentId: string): Promise<Buffer> {
+  const blobPath = getBlobPath(attachmentId);
+  if (!existsSync(blobPath)) throw new Error(`Attachment blob not found: ${attachmentId}`);
+  return readFile(blobPath);
+}
+
+export async function writeAttachmentBlobRaw(attachmentId: string, blob: Buffer): Promise<void> {
+  const dir = getAttachmentsDir();
+  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+  await writeFile(getBlobPath(attachmentId), blob);
+}
+
+export async function deleteAllAttachmentBlobs(): Promise<void> {
+  const dir = getAttachmentsDir();
+  if (!existsSync(dir)) return;
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const e of entries) {
+    if (e.isFile() && e.name.endsWith('.bin')) {
+      await unlink(join(dir, e.name));
+    }
   }
 }

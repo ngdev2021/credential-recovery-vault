@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard } from 'electron';
 import { join } from 'path';
 import { readEncryptedVault } from './vaultStore';
 import {
@@ -8,6 +8,9 @@ import {
   saveVault,
   exportVaultEncrypted,
   importVaultEncrypted,
+  exportVaultBundle,
+  importVaultBundleReplace,
+  importVaultBundleMerge,
 } from './vaultStore';
 import {
   saveEncryptedAttachment,
@@ -16,9 +19,10 @@ import {
   computeFileSha256,
 } from './attachmentsStore';
 import { getVaultKey } from './crypto/vaultCrypto';
-import type { VaultPayload, VaultItem, EncryptedVault, VaultAttachment } from '../shared/types/vault';
+import { saveLastBackupInfo, getLastBackupInfo } from './backupStore';
+import type { VaultPayload, VaultItem, EncryptedVault, VaultAttachment, VaultExportBundle } from '../shared/types/vault';
 import { v4 as uuidv4 } from 'uuid';
-import { writeFile, mkdtemp } from 'fs/promises';
+import { writeFile, readFile, mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 
 let mainWindow: BrowserWindow | null = null;
@@ -59,6 +63,13 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
     clearSensitiveData();
+  });
+
+  mainWindow.on('blur', () => {
+    if (decryptedPayload || masterPassword) {
+      clearSensitiveData();
+      mainWindow?.webContents.send('vault:locked');
+    }
   });
 }
 
@@ -199,18 +210,69 @@ ipcMain.handle('vault:importEncrypted', async (_, encrypted: EncryptedVault, pas
   };
 });
 
-ipcMain.handle('vault:pickFile', async (_, options?: { forImport?: boolean }) => {
+ipcMain.handle('vault:exportBundle', async () => {
+  if (!decryptedPayload || !masterPassword) throw new Error('Vault is locked');
+  const bundle = await exportVaultBundle(masterPassword, decryptedPayload);
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    defaultPath: `vault-backup-${new Date().toISOString().slice(0, 10)}.json`,
+    filters: [{ name: 'Vault backup', extensions: ['json'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  await writeFile(result.filePath, JSON.stringify(bundle), 'utf-8');
+  await saveLastBackupInfo({
+    path: result.filePath,
+    exportedAt: new Date().toISOString(),
+  });
+  return { path: result.filePath };
+});
+
+ipcMain.handle('vault:importBundle', async (_, filePath: string, password: string, mode: 'replace' | 'merge') => {
+  const raw = await readFile(filePath, 'utf-8');
+  const bundle = JSON.parse(raw) as VaultExportBundle;
+  if (!bundle.vault || !bundle.attachments) throw new Error('Invalid vault backup file');
+
+  if (mode === 'replace') {
+    await importVaultBundleReplace(bundle, password);
+    vaultKey = await getVaultKey(password, bundle.vault.salt);
+    decryptedPayload = await unlockVault(password);
+    masterPassword = password;
+  } else {
+    if (!masterPassword) throw new Error('Vault must be unlocked to merge');
+    decryptedPayload = await importVaultBundleMerge(bundle, password, masterPassword);
+  }
+  return {
+    success: true,
+    metadata: decryptedPayload!.metadata,
+    items: decryptedPayload!.items,
+  };
+});
+
+ipcMain.handle('vault:getLastBackup', async () => getLastBackupInfo());
+
+const CLIPBOARD_TIMEOUT_MS = 30 * 1000;
+ipcMain.handle('vault:copyWithTimeout', async (_, text: string) => {
+  clipboard.writeText(text);
+  setTimeout(() => {
+    if (clipboard.readText() === text) {
+      clipboard.clear();
+    }
+  }, CLIPBOARD_TIMEOUT_MS);
+});
+
+ipcMain.handle('vault:pickFile', async (_, options?: { forImport?: boolean; forBundle?: boolean }) => {
   const result = await dialog.showOpenDialog(mainWindow!, {
     properties: ['openFile'],
-    filters: options?.forImport
-      ? [
-          { name: 'Text files', extensions: ['txt', 'csv'] },
-          { name: 'All files', extensions: ['*'] },
-        ]
-      : [
-          { name: 'Documents', extensions: ['txt', 'csv', 'pdf', 'png', 'jpg', 'jpeg'] },
-          { name: 'All files', extensions: ['*'] },
-        ],
+    filters: options?.forBundle
+      ? [{ name: 'Vault backup', extensions: ['json'] }, { name: 'All files', extensions: ['*'] }]
+      : options?.forImport
+        ? [
+            { name: 'Text files', extensions: ['txt', 'csv'] },
+            { name: 'All files', extensions: ['*'] },
+          ]
+        : [
+            { name: 'Documents', extensions: ['txt', 'csv', 'pdf', 'png', 'jpg', 'jpeg'] },
+            { name: 'All files', extensions: ['*'] },
+          ],
   });
   if (result.canceled || !result.filePaths[0]) return null;
   return result.filePaths[0];

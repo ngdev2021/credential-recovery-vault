@@ -54,6 +54,12 @@ export interface VaultPayload {
   items: VaultItem[];
 }
 
+export interface VaultExportBundle {
+  version: 1;
+  vault: EncryptedVault;
+  attachments: Record<string, string>; // attachmentId -> base64 blob
+}
+
 export interface EncryptedVault {
   salt: string; // base64
   kdfParams: {
